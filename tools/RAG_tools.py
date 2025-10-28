@@ -602,8 +602,8 @@ def format_diagnostic_results(
     dtc_code: Optional[str] = None,
     relevance_score: int = 0,
 ) -> dict:
-    """Format the final diagnostic results with proper structure (EXACT from version3_refactor)."""
-    logger.info("📝 Formatting final results")
+    """Format the final diagnostic results with separate TTS and diagnostic report outputs."""
+    logger.info("📝 Formatting final results with dual output")
     
     print(f"🔍 DEBUG: Received relevance_score = {relevance_score}")
     
@@ -635,7 +635,20 @@ def format_diagnostic_results(
     if use_rag:
         logger.info("Using RAG answer with step/image/table formatting")
         processed_rag_content = process_content_with_inline_images(rag_content)
-        return {"formatted_response": processed_rag_content}
+        
+        # Generate concise TTS summary (4-5 sentences, no formatting)
+        tts_summary = generate_tts_summary(processed_rag_content, dtc_code)
+        
+        return {
+            "formatted_response": json.dumps({
+                "voice_output": tts_summary,
+                "diagnostic_report": {
+                    "content": processed_rag_content,
+                    "web_sources": [],
+                    "youtube_videos": []
+                }
+            })
+        }
     
     # If RAG is not relevant (score 0) OR has no content, use web search
     if not use_rag and (web_results or youtube_results):
@@ -644,8 +657,8 @@ def format_diagnostic_results(
         
         # Combine web search content
         web_content = "\n\n".join([r.get("content", "") for r in web_results or [] if "content" in r])
-        source_urls = [r.get("url", "") for r in web_results or [] if "url" in r][:3]
-        youtube_links = [video.get("url", "") for video in youtube_results or []][:4]
+        source_urls = [{"title": r.get("title", "Web Source"), "url": r.get("url", "")} for r in web_results or [] if "url" in r][:3]
+        youtube_links = [{"title": video.get("title", ""), "url": video.get("url", ""), "thumbnail": video.get("thumbnail_hq", ""), "video_id": video.get("video_id", "")} for video in youtube_results or []][:4]
         
         # Choose appropriate prompt based on presence of DTC code
         if dtc_code:
@@ -658,25 +671,25 @@ WEB SEARCH RESULTS: {web_content}
 
 Create a comprehensive diagnostic report that STRICTLY follows this EXACT format:
 
-Category: [one-line description of what this DTC code represents]
+**Category:** [one-line description of what this DTC code represents]
 
-Potential Causes:
-- [cause 1]
-- [cause 2]
-- [continue until you have up to 8 causes, be specific and technical]
+**Potential Causes:**
+• [cause 1]
+• [cause 2]
+• [continue until you have up to 6 causes, be specific and technical]
 
-Diagnostic Steps:
-- [step 1]
-- [step 2]
-- [continue until you have up to 5 clear diagnostic steps]
+**Diagnostic Steps:**
+• [step 1]
+• [step 2]
+• [continue until you have up to 5 clear diagnostic steps]
 
-Possible Solutions:
-- [solution 1]
-- [solution 2]
-- [continue until you have up to 8 solutions, be specific and technical]
+**Possible Solutions:**
+• [solution 1]
+• [solution 2]
+• [continue until you have up to 6 solutions, be specific and technical]
 
 Your response MUST follow this format exactly, with these exact section headings.
-Be concise and technical in your bullet points. Do not add any other sections or explanations.
+Be detailed and technical in your bullet points. Include all relevant information.
 """
         else:
             prompt_template = f"""
@@ -691,39 +704,113 @@ WEB SEARCH RESULTS:
 
 Provide a detailed, helpful response that synthesizes all this information.
 If the RAG answer indicates "No relevant information found in the PDF", prioritize the web search results.
+Format your response with clear sections and bullet points where appropriate.
 """
         
         try:
             response = llm.invoke(prompt_template)
             diagnostic_content = response.content.strip()
             
-            # Build the final formatted answer
-            final_answer = diagnostic_content
-            
-            # Add source URLs section (web)
-            if source_urls:
-                final_answer += "\n\n🕸️ Web Sources:\n"
-                for url in source_urls:
-                    final_answer += f"- {url}\n"
-            
-            # Add YouTube links section
-            if youtube_links:
-                final_answer += "\n\n📺 YouTube Diagnostic Videos:\n"
-                for link in youtube_links:
-                    final_answer += f"- {link}\n"
+            # Generate concise TTS summary
+            tts_summary = generate_tts_summary(diagnostic_content, dtc_code)
             
             logger.info("Generated structured diagnostic report from web sources")
-            return {"formatted_response": final_answer}
+            return {
+                "formatted_response": json.dumps({
+                    "voice_output": tts_summary,
+                    "diagnostic_report": {
+                        "content": diagnostic_content,
+                        "web_sources": source_urls,
+                        "youtube_videos": youtube_links
+                    }
+                })
+            }
         
         except Exception as e:
             logger.error(f"Error formatting results: {e}")
-            return {"formatted_response": rag_content}  # Fallback to original answer
+            tts_fallback = "I found some information but couldn't format it properly. Please check the diagnostic report."
+            return {
+                "formatted_response": json.dumps({
+                    "voice_output": tts_fallback,
+                    "diagnostic_report": {
+                        "content": rag_content,
+                        "web_sources": [],
+                        "youtube_videos": []
+                    }
+                })
+            }
     
     # Fallback: Return RAG content even if relevance is low (no web results available)
     logger.info("Fallback: Using RAG content despite low relevance (no web results)")
     print("⚠️ Fallback: No web results, using RAG content despite low relevance")
     processed_rag_content = process_content_with_inline_images(rag_content)
-    return {"formatted_response": processed_rag_content}
+    tts_summary = generate_tts_summary(processed_rag_content, dtc_code)
+    
+    return {
+        "formatted_response": json.dumps({
+            "voice_output": tts_summary,
+            "diagnostic_report": {
+                "content": processed_rag_content,
+                "web_sources": [],
+                "youtube_videos": []
+            }
+        })
+    }
+
+def generate_tts_summary(content: str, dtc_code: Optional[str] = None) -> str:
+    """Generate a concise 4-5 sentence summary for TTS, removing all formatting."""
+    try:
+        # Clean the content by removing formatting characters
+        clean_content = content
+        
+        # Remove markdown formatting
+        clean_content = re.sub(r'\*\*([^*]+)\*\*', r'\1', clean_content)  # Remove **bold**
+        clean_content = re.sub(r'\*([^*]+)\*', r'\1', clean_content)      # Remove *italic*
+        clean_content = re.sub(r'#+\s*', '', clean_content)               # Remove # headers
+        clean_content = re.sub(r'•\s*', '', clean_content)                # Remove bullet points
+        clean_content = re.sub(r'-\s*', '', clean_content)                # Remove dashes
+        clean_content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', clean_content)  # Remove links [text](url) -> text
+        clean_content = re.sub(r'https?://[^\s]+', '', clean_content)     # Remove URLs
+        clean_content = re.sub(r'\n+', ' ', clean_content)                # Replace newlines with spaces
+        clean_content = re.sub(r'\s+', ' ', clean_content)                # Normalize whitespace
+        
+        # Create summary prompt
+        summary_prompt = f"""
+        Create a natural, conversational summary in exactly 4-5 sentences for text-to-speech from this diagnostic content:
+        
+        {clean_content[:800]}
+        
+        Requirements:
+        - Use simple, conversational language
+        - Focus on the main issue and primary solution
+        - No technical jargon or complex terms
+        - No URLs, formatting, or special characters
+        - Maximum 4-5 sentences
+        - Keep it under 100 words
+        {"- Mention the DTC code " + dtc_code + " if relevant" if dtc_code else ""}
+        """
+        
+        response = llm.invoke(summary_prompt)
+        summary = response.content.strip()
+        
+        # Final cleanup to ensure no formatting remains
+        summary = re.sub(r'[*#•\-]', '', summary)
+        summary = re.sub(r'\s+', ' ', summary).strip()
+        
+        # Ensure it's not too long
+        if len(summary) > 300:
+            sentences = summary.split('.')
+            summary = '. '.join(sentences[:4]) + '.'
+        
+        logger.info(f"Generated TTS summary: {summary[:50]}...")
+        return summary
+        
+    except Exception as e:
+        logger.error(f"Error generating TTS summary: {e}")
+        if dtc_code:
+            return f"I found information about {dtc_code}. This appears to be a diagnostic trouble code. Please check the detailed report for complete information."
+        else:
+            return "I found some diagnostic information for your vehicle. Please check the detailed report for the complete analysis."
 
 def process_content_with_inline_images(content: str) -> str:
     """Process content to display images and tables inline with steps (EXACT from version3_refactor)."""
