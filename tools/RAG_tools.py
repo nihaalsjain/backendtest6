@@ -811,11 +811,29 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
     import re, urllib.parse
     logger.info("📝 Formatting structured diagnostic results")
     
+    # Auto-extract DTC code from question if not provided
+    if not dtc_code:
+        dtc_match = re.search(r"\b([PBUC]\d{4})\b", question.upper())
+        if dtc_match:
+            dtc_code = dtc_match.group(1)
+            logger.info(f"🔧 Auto-extracted DTC code: {dtc_code}")
+    
     try:
         web_results = web_results or []
         youtube_results = youtube_results or []
 
-        # If we don't have YouTube results and we have a DTC code, let's search for YouTube videos
+        # Auto-search for web results if not provided and we have a DTC code
+        if not web_results and dtc_code:
+            logger.info(f"🔍 No web results provided, searching for DTC {dtc_code} information")
+            try:
+                web_search_result = search_web_for_vehicle_info(f"DTC {dtc_code}", dtc_code=dtc_code)
+                if web_search_result.get('success') and web_search_result.get('results'):
+                    web_results = web_search_result['results']
+                    logger.info(f"🌐 Found {len(web_results)} web results via automatic search")
+            except Exception as e:
+                logger.warning(f"Failed to auto-search web: {e}")
+
+        # Auto-search for YouTube results if not provided and we have a DTC code
         if not youtube_results and dtc_code:
             logger.info(f"🔍 No YouTube results provided, searching for DTC {dtc_code} videos")
             try:
