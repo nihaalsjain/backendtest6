@@ -874,64 +874,79 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
 - Clear carbon buildup from intake manifold
 - Repair vacuum leaks or electrical issues"""
         
-        # Process web results if available
+        # Process web results into separate structured data (don't append to final_answer)
         source_urls = []
         if isinstance(web_results, list) and web_results:
-            final_answer += "\n\n## 🌐 Additional Web Sources\n"
+            logger.info(f"🌐 Processing {len(web_results)} web results")
             for r in web_results:
-                url = r.get('url') if isinstance(r, dict) else str(r)
-                title = r.get('title') if isinstance(r, dict) else url
-                snippet = r.get('content','') if isinstance(r, dict) else ''
-                source_urls.append({'title': title, 'url': url, 'snippet': snippet})
-                final_answer += f"\n**{title}**\n{url}\n{snippet[:200]}{'...' if len(snippet) > 200 else ''}\n"
+                if isinstance(r, dict):
+                    url = r.get('url', '')
+                    title = r.get('title', url)
+                    snippet = r.get('content', '')[:200] + ('...' if len(r.get('content', '')) > 200 else '')
+                    source_urls.append({'title': title, 'url': url, 'snippet': snippet})
+                    logger.info(f"   - Web source: {title[:50]}...")
 
-        # Process YouTube results if available
+        # Process YouTube results into separate structured data (don't append to final_answer)
         youtube_links_list = []
         if isinstance(youtube_results, list) and youtube_results:
-            final_answer += "\n\n## 📺 Diagnostic Video Resources\n"
+            logger.info(f"📺 Processing {len(youtube_results)} YouTube results")
             for y in youtube_results:
                 if isinstance(y, dict):
                     url = y.get('url') or y.get('link') or ''
                     title = y.get('title') or y.get('name') or url
-                else:
-                    url = str(y); title = url
-                vid = None
-                try:
-                    parsed = urllib.parse.urlparse(url)
-                    if parsed.hostname and 'youtube' in parsed.hostname:
-                        q = urllib.parse.parse_qs(parsed.query)
-                        vid = q.get('v', [None])[0]
-                        if not vid:
-                            parts = parsed.path.split('/')
-                            for p in parts[::-1]:
-                                if p and len(p) >= 6:
-                                    vid = p; break
-                except Exception:
                     vid = None
-                thumbnail = f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None
-                youtube_links_list.append({'title': title, 'url': url, 'video_id': vid, 'thumbnail': thumbnail})
-                final_answer += f"\n**{title}**\n{url}\n"
+                    try:
+                        parsed = urllib.parse.urlparse(url)
+                        if parsed.hostname and 'youtube' in parsed.hostname:
+                            q = urllib.parse.parse_qs(parsed.query)
+                            vid = q.get('v', [None])[0]
+                            if not vid:
+                                parts = parsed.path.split('/')
+                                for p in parts[::-1]:
+                                    if p and len(p) >= 6:
+                                        vid = p; break
+                    except Exception:
+                        vid = None
+                    thumbnail = f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None
+                    youtube_links_list.append({'title': title, 'url': url, 'video_id': vid, 'thumbnail': thumbnail})
+                    logger.info(f"   - YouTube video: {title[:50]}...")
 
-        # Create short TTS summary via LLM
+        # Create short TTS summary - concise voice-only output
         tts_summary = None
         try:
-            tts_prompt = (
-                "Summarize the following diagnostic report in 4-5 short sentences for voice output. "
-                "Remove URLs, markdown, bullets, hashtags, and any special symbols. Keep it plain text.\n\n"
-                "REPORT:\n" + final_answer
-            )
+            if dtc_code:
+                tts_prompt = f"""Create a brief 3-sentence summary for voice output about diagnostic trouble code {dtc_code}. 
+Focus only on: 1) What the code means, 2) Most common cause, 3) Basic next step.
+Use simple language. NO URLs, no technical details, no markdown, no special characters.
+
+Based on: {rag_answer[:300]}"""
+            else:
+                tts_prompt = f"""Create a brief 3-sentence summary for voice output about this vehicle issue:
+{question}
+
+Based on: {rag_answer[:300]}
+
+Use simple language. NO URLs, no technical details, no markdown, no special characters."""
+            
             tts_resp = llm.invoke(tts_prompt)
             tts_summary = tts_resp.content.strip() if getattr(tts_resp, 'content', None) else None
+            
             if tts_summary:
-                tts_summary = re.sub(r'http\S+|www\S+','', tts_summary)
-                tts_summary = re.sub(r'[#*•\-`\n]+',' ', tts_summary)
-                tts_summary = ' '.join(tts_summary.split())
-        except Exception:
-            # Fallback TTS summary
-            text = re.sub(r'http\S+|www\S+','', rag_answer or "")
-            text = re.sub(r'[#*•\-`]+','', text)
-            words = text.split()
-            tts_summary = " ".join(words[:60])
+                # Aggressive cleaning for TTS
+                tts_summary = re.sub(r'https?://[^\s]+', '', tts_summary)  # Remove URLs
+                tts_summary = re.sub(r'www\.[^\s]+', '', tts_summary)      # Remove www links
+                tts_summary = re.sub(r'[#*•\-`\[\]{}|\\]', '', tts_summary) # Remove special chars
+                tts_summary = re.sub(r'\n+', ' ', tts_summary)             # Replace newlines
+                tts_summary = re.sub(r'\s+', ' ', tts_summary)             # Normalize spaces
+                tts_summary = tts_summary.strip()
+                
+        except Exception as e:
+            logger.warning(f"Failed to generate TTS summary: {e}")
+            # Simple fallback TTS summary
+            if dtc_code:
+                tts_summary = f"Diagnostic code {dtc_code} detected. This indicates an issue with your vehicle's emission system. Please check the detailed report for specific causes and solutions."
+            else:
+                tts_summary = "Diagnostic information has been found for your vehicle issue. Please check the detailed report for specific causes and solutions."
 
         payload = {
             'voice_output': tts_summary,
@@ -944,7 +959,19 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
             'relevance_score': relevance_score
         }
         
-        logger.info(f"📊 Structured response created: voice_output={len(tts_summary or '')} chars, diagnostic_content={len(final_answer)} chars, web_sources={len(source_urls)}, youtube_videos={len(youtube_links_list)}")
+        # Debug logging to troubleshoot frontend issue
+        logger.info(f"📊 Structured response created:")
+        logger.info(f"   - voice_output: {len(tts_summary or '')} chars")
+        logger.info(f"   - diagnostic_content: {len(final_answer)} chars") 
+        logger.info(f"   - web_sources: {len(source_urls)} items")
+        logger.info(f"   - youtube_videos: {len(youtube_links_list)} items")
+        logger.info(f"   - Full payload keys: {list(payload.keys())}")
+        logger.info(f"   - diagnostic_report keys: {list(payload['diagnostic_report'].keys())}")
+        
+        # Log sample of content for debugging
+        content_preview = (final_answer[:200] + '...') if len(final_answer) > 200 else final_answer
+        logger.info(f"   - Content preview: {content_preview}")
+        
         return payload
         
     except Exception as e:
