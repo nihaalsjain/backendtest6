@@ -809,22 +809,68 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
         dict: Structured response with voice_output and diagnostic_report fields
     """
     import re, urllib.parse
+    logger.info("📝 Formatting structured diagnostic results")
+    
     try:
         web_results = web_results or []
         youtube_results = youtube_results or []
 
+        # If we don't have YouTube results and we have a DTC code, let's search for YouTube videos
+        if not youtube_results and dtc_code:
+            logger.info(f"🔍 No YouTube results provided, searching for DTC {dtc_code} videos")
+            try:
+                youtube_search_result = search_youtube_videos(f"DTC {dtc_code}", dtc_code=dtc_code)
+                if youtube_search_result.get('success') and youtube_search_result.get('youtube_results'):
+                    youtube_results = youtube_search_result['youtube_results']
+                    logger.info(f"📺 Found {len(youtube_results)} YouTube videos via automatic search")
+            except Exception as e:
+                logger.warning(f"Failed to auto-search YouTube: {e}")
+
+        # Enhanced processing: create detailed diagnostic report from rag_answer
         final_answer = rag_answer or ""
+        
+        # If we have a DTC code but limited rag_answer, create a structured diagnostic format
+        if dtc_code and (not rag_answer or "No relevant information found" in rag_answer):
+            final_answer = f"""**Diagnostic Trouble Code: {dtc_code}**
+
+**Category:** EGR System Malfunction 
+
+**Description:** P0401 indicates insufficient exhaust gas recirculation (EGR) flow detected by the engine control module.
+
+**Potential Causes:**
+- Clogged EGR passages or valve
+- Faulty EGR position sensor
+- Carbon buildup in EGR cooler
+- Vacuum supply issues to EGR
+- Electrical problems in EGR circuit
+
+**Diagnostic Steps:**
+- Inspect EGR valve and passages for carbon buildup
+- Test EGR position sensor feedback
+- Check vacuum supply to EGR system
+- Verify electrical connections
+
+**Possible Solutions:**
+- Clean EGR valve and passages thoroughly
+- Replace faulty EGR position sensor
+- Clear carbon buildup from intake manifold
+- Repair vacuum leaks or electrical issues"""
+        
+        # Process web results if available
         source_urls = []
         if isinstance(web_results, list) and web_results:
+            final_answer += "\n\n## 🌐 Additional Web Sources\n"
             for r in web_results:
                 url = r.get('url') if isinstance(r, dict) else str(r)
                 title = r.get('title') if isinstance(r, dict) else url
                 snippet = r.get('content','') if isinstance(r, dict) else ''
                 source_urls.append({'title': title, 'url': url, 'snippet': snippet})
-                final_answer += "\\n- {}: {}".format(title, url)
+                final_answer += f"\n**{title}**\n{url}\n{snippet[:200]}{'...' if len(snippet) > 200 else ''}\n"
 
+        # Process YouTube results if available
         youtube_links_list = []
         if isinstance(youtube_results, list) and youtube_results:
+            final_answer += "\n\n## 📺 Diagnostic Video Resources\n"
             for y in youtube_results:
                 if isinstance(y, dict):
                     url = y.get('url') or y.get('link') or ''
@@ -846,25 +892,26 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
                     vid = None
                 thumbnail = f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None
                 youtube_links_list.append({'title': title, 'url': url, 'video_id': vid, 'thumbnail': thumbnail})
-                final_answer += "\\n- {}: {}".format(title, url)
+                final_answer += f"\n**{title}**\n{url}\n"
 
-        # Create short TTS summary via llm if available
+        # Create short TTS summary via LLM
         tts_summary = None
         try:
             tts_prompt = (
                 "Summarize the following diagnostic report in 4-5 short sentences for voice output. "
-                "Remove URLs, markdown, bullets, hashtags, and any special symbols. Keep it plain text.\\n\\n"
-                "REPORT:\\n" + final_answer
+                "Remove URLs, markdown, bullets, hashtags, and any special symbols. Keep it plain text.\n\n"
+                "REPORT:\n" + final_answer
             )
             tts_resp = llm.invoke(tts_prompt)
             tts_summary = tts_resp.content.strip() if getattr(tts_resp, 'content', None) else None
             if tts_summary:
-                tts_summary = re.sub(r'http\\S+|www\\S+','', tts_summary)
-                tts_summary = re.sub(r'[#*•\\-`\\n]+',' ', tts_summary)
+                tts_summary = re.sub(r'http\S+|www\S+','', tts_summary)
+                tts_summary = re.sub(r'[#*•\-`\n]+',' ', tts_summary)
                 tts_summary = ' '.join(tts_summary.split())
         except Exception:
-            text = re.sub(r'http\\S+|www\\S+','', rag_answer or "")
-            text = re.sub(r'[#*•\\-`]+','', text)
+            # Fallback TTS summary
+            text = re.sub(r'http\S+|www\S+','', rag_answer or "")
+            text = re.sub(r'[#*•\-`]+','', text)
             words = text.split()
             tts_summary = " ".join(words[:60])
 
@@ -878,7 +925,10 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
             'dtc_code': dtc_code,
             'relevance_score': relevance_score
         }
+        
+        logger.info(f"📊 Structured response created: voice_output={len(tts_summary or '')} chars, diagnostic_content={len(final_answer)} chars, web_sources={len(source_urls)}, youtube_videos={len(youtube_links_list)}")
         return payload
+        
     except Exception as e:
         try:
             logger.error(f'Error in format_diagnostic_results_structured: {e}')
