@@ -663,17 +663,17 @@ Category: [one-line description of what this DTC code represents]
 Potential Causes:
 - [cause 1]
 - [cause 2]
-- [continue until you have up to 8 causes, be specific and technical]
+- [continue until you have up to 3 causes, be specific and technical]
 
 Diagnostic Steps:
 - [step 1]
 - [step 2]
-- [continue until you have up to 5 clear diagnostic steps]
+- [continue until you have up to 3 clear diagnostic steps]
 
 Possible Solutions:
 - [solution 1]
 - [solution 2]
-- [continue until you have up to 8 solutions, be specific and technical]
+- [continue until you have up to 3 solutions, be specific and technical]
 
 Your response MUST follow this format exactly, with these exact section headings.
 Be concise and technical in your bullet points. Do not add any other sections or explanations.
@@ -786,3 +786,89 @@ __all__ = [
     "llm",
     "retriever",
 ]
+
+# --- START: structured format_diagnostic_results (added by assistant) ---
+def format_diagnostic_results_structured(question: str, rag_answer: str, web_results: list = None, youtube_results: list = None, dtc_code: str = None, relevance_score: int = 0) -> dict:
+    import re, urllib.parse
+    try:
+        web_results = web_results or []
+        youtube_results = youtube_results or []
+
+        final_answer = rag_answer or ""
+        source_urls = []
+        if isinstance(web_results, list) and web_results:
+            for r in web_results:
+                url = r.get('url') if isinstance(r, dict) else str(r)
+                title = r.get('title') if isinstance(r, dict) else url
+                snippet = r.get('content','') if isinstance(r, dict) else ''
+                source_urls.append({'title': title, 'url': url, 'snippet': snippet})
+                final_answer += "\\n- {}: {}".format(title, url)
+
+        youtube_links_list = []
+        if isinstance(youtube_results, list) and youtube_results:
+            for y in youtube_results:
+                if isinstance(y, dict):
+                    url = y.get('url') or y.get('link') or ''
+                    title = y.get('title') or y.get('name') or url
+                else:
+                    url = str(y); title = url
+                vid = None
+                try:
+                    parsed = urllib.parse.urlparse(url)
+                    if parsed.hostname and 'youtube' in parsed.hostname:
+                        q = urllib.parse.parse_qs(parsed.query)
+                        vid = q.get('v', [None])[0]
+                        if not vid:
+                            parts = parsed.path.split('/')
+                            for p in parts[::-1]:
+                                if p and len(p) >= 6:
+                                    vid = p; break
+                except Exception:
+                    vid = None
+                thumbnail = f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None
+                youtube_links_list.append({'title': title, 'url': url, 'video_id': vid, 'thumbnail': thumbnail})
+                final_answer += "\\n- {}: {}".format(title, url)
+
+        # Create short TTS summary via llm if available
+        tts_summary = None
+        try:
+            tts_prompt = (
+                "Summarize the following diagnostic report in 4-5 short sentences for voice output. "
+                "Remove URLs, markdown, bullets, hashtags, and any special symbols. Keep it plain text.\\n\\n"
+                "REPORT:\\n" + final_answer
+            )
+            tts_resp = llm.invoke(tts_prompt)
+            tts_summary = tts_resp.content.strip() if getattr(tts_resp, 'content', None) else None
+            if tts_summary:
+                tts_summary = re.sub(r'http\\S+|www\\S+','', tts_summary)
+                tts_summary = re.sub(r'[#*•\\-`\\n]+',' ', tts_summary)
+                tts_summary = ' '.join(tts_summary.split())
+        except Exception:
+            text = re.sub(r'http\\S+|www\\S+','', rag_answer or "")
+            text = re.sub(r'[#*•\\-`]+','', text)
+            words = text.split()
+            tts_summary = " ".join(words[:60])
+
+        payload = {
+            'voice_output': tts_summary,
+            'diagnostic_report': {
+                'content': final_answer,
+                'web_sources': source_urls,
+                'youtube_videos': youtube_links_list
+            },
+            'dtc_code': dtc_code,
+            'relevance_score': relevance_score
+        }
+        return payload
+    except Exception as e:
+        try:
+            logger.error(f'Error in format_diagnostic_results_structured: {e}')
+        except:
+            pass
+        return {'voice_output': (rag_answer or '')[:300], 'diagnostic_report': {'content': (rag_answer or ''), 'web_sources': [], 'youtube_videos': []}, 'dtc_code': dtc_code, 'relevance_score': relevance_score}
+
+try:
+    format_diagnostic_results = format_diagnostic_results_structured
+except Exception:
+    pass
+# --- END: structured format_diagnostic_results ---
