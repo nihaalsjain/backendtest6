@@ -788,7 +788,26 @@ __all__ = [
 ]
 
 # --- START: structured format_diagnostic_results (added by assistant) ---
+@tool
 def format_diagnostic_results_structured(question: str, rag_answer: str, web_results: list = None, youtube_results: list = None, dtc_code: str = None, relevance_score: int = 0) -> dict:
+    """
+    Format diagnostic results with structured output for both voice and detailed report.
+    
+    This function creates a structured response containing:
+    - voice_output: Short TTS-friendly summary
+    - diagnostic_report: Detailed report with web sources and YouTube videos
+    
+    Args:
+        question: The original user question
+        rag_answer: Answer from RAG search
+        web_results: List of web search results
+        youtube_results: List of YouTube video results  
+        dtc_code: Diagnostic trouble code if applicable
+        relevance_score: Relevance score from document grading
+        
+    Returns:
+        dict: Structured response with voice_output and diagnostic_report fields
+    """
     import re, urllib.parse
     try:
         web_results = web_results or []
