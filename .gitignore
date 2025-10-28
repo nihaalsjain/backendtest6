@@ -1,0 +1,8 @@
+allion/
+src/__pycache__/
+configs/__pycache__/
+agents/__pycache__/
+tools/__pycache__/
+output/
+.env
+conversation_logs/

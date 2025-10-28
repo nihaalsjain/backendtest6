@@ -1,0 +1,6 @@
+{
+  "automotive": {
+    "instructions_file": "prompts/automotive/instructions.txt",
+    "greetings_file": "prompts/automotive/greetings.json"
+  }
+}
