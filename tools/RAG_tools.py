@@ -788,26 +788,9 @@ __all__ = [
 ]
 
 # --- START: structured format_diagnostic_results (added by assistant) ---
-@tool
+@tool  
 def format_diagnostic_results_structured(question: str, rag_answer: str, web_results: list = None, youtube_results: list = None, dtc_code: str = None, relevance_score: int = 0) -> dict:
-    """
-    Format diagnostic results with structured output for both voice and detailed report.
-    
-    This function creates a structured response containing:
-    - voice_output: Short TTS-friendly summary
-    - diagnostic_report: Detailed report with web sources and YouTube videos
-    
-    Args:
-        question: The original user question
-        rag_answer: Answer from RAG search
-        web_results: List of web search results
-        youtube_results: List of YouTube video results  
-        dtc_code: Diagnostic trouble code if applicable
-        relevance_score: Relevance score from document grading
-        
-    Returns:
-        dict: Structured response with voice_output and diagnostic_report fields
-    """
+    """Format diagnostic results with structured output for both voice and detailed report."""
     import re, urllib.parse
     logger.info("📝 Formatting structured diagnostic results")
     
@@ -822,164 +805,102 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
         web_results = web_results or []
         youtube_results = youtube_results or []
 
-        # Auto-search for web results if not provided and we have a DTC code
-        if not web_results and dtc_code:
-            logger.info(f"🔍 No web results provided, searching for DTC {dtc_code} information")
-            try:
-                web_search_result = search_web_for_vehicle_info(f"DTC {dtc_code}", dtc_code=dtc_code)
-                if web_search_result.get('success') and web_search_result.get('results'):
-                    web_results = web_search_result['results']
-                    logger.info(f"🌐 Found {len(web_results)} web results via automatic search")
-            except Exception as e:
-                logger.warning(f"Failed to auto-search web: {e}")
+        # Smart fallback: If no results provided, search for them
+        if not web_results or not youtube_results:
+            logger.info(f"🔍 Missing data, performing search for: {question}")
+            
+            if not web_results:
+                try:
+                    web_search_result = search_web_for_vehicle_info(question)
+                    if web_search_result.get("success") and web_search_result.get("results"):
+                        web_results = web_search_result["results"]
+                        logger.info(f"🌐 Found {len(web_results)} web results via fallback")
+                except Exception as e:
+                    logger.warning(f"Failed to search web: {e}")
 
-        # Auto-search for YouTube results if not provided and we have a DTC code
-        if not youtube_results and dtc_code:
-            logger.info(f"🔍 No YouTube results provided, searching for DTC {dtc_code} videos")
-            try:
-                youtube_search_result = search_youtube_videos(f"DTC {dtc_code}", dtc_code=dtc_code)
-                if youtube_search_result.get('success') and youtube_search_result.get('youtube_results'):
-                    youtube_results = youtube_search_result['youtube_results']
-                    logger.info(f"📺 Found {len(youtube_results)} YouTube videos via automatic search")
-            except Exception as e:
-                logger.warning(f"Failed to auto-search YouTube: {e}")
+            if not youtube_results:
+                try:
+                    youtube_search_result = search_youtube_videos(question)
+                    if youtube_search_result.get("success") and youtube_search_result.get("youtube_results"):
+                        youtube_results = youtube_search_result["youtube_results"]
+                        logger.info(f"📺 Found {len(youtube_results)} YouTube videos via fallback")
+                except Exception as e:
+                    logger.warning(f"Failed to search YouTube: {e}")
 
-        # Enhanced processing: create detailed diagnostic report from rag_answer
+        # Create main diagnostic content
         final_answer = rag_answer or ""
         
-        # If we have a DTC code but limited rag_answer, create a structured diagnostic format
-        if dtc_code and (not rag_answer or "No relevant information found" in rag_answer):
-            final_answer = f"""**Diagnostic Trouble Code: {dtc_code}**
-
-**Category:** EGR System Malfunction 
-
-**Description:** P0401 indicates insufficient exhaust gas recirculation (EGR) flow detected by the engine control module.
-
-**Potential Causes:**
-- Clogged EGR passages or valve
-- Faulty EGR position sensor
-- Carbon buildup in EGR cooler
-- Vacuum supply issues to EGR
-- Electrical problems in EGR circuit
-
-**Diagnostic Steps:**
-- Inspect EGR valve and passages for carbon buildup
-- Test EGR position sensor feedback
-- Check vacuum supply to EGR system
-- Verify electrical connections
-
-**Possible Solutions:**
-- Clean EGR valve and passages thoroughly
-- Replace faulty EGR position sensor
-- Clear carbon buildup from intake manifold
-- Repair vacuum leaks or electrical issues"""
-        
-        # Process web results into separate structured data (don't append to final_answer)
+        # Process web results into structured data
         source_urls = []
         if isinstance(web_results, list) and web_results:
-            logger.info(f"🌐 Processing {len(web_results)} web results")
             for r in web_results:
                 if isinstance(r, dict):
-                    url = r.get('url', '')
-                    title = r.get('title', url)
-                    snippet = r.get('content', '')[:200] + ('...' if len(r.get('content', '')) > 200 else '')
-                    source_urls.append({'title': title, 'url': url, 'snippet': snippet})
-                    logger.info(f"   - Web source: {title[:50]}...")
+                    url = r.get("url", "")
+                    title = r.get("title", url)
+                    snippet = r.get("content", "")[:200]
+                    source_urls.append({"title": title, "url": url, "snippet": snippet})
 
-        # Process YouTube results into separate structured data (don't append to final_answer)
+        # Process YouTube results into structured data
         youtube_links_list = []
         if isinstance(youtube_results, list) and youtube_results:
-            logger.info(f"📺 Processing {len(youtube_results)} YouTube results")
             for y in youtube_results:
                 if isinstance(y, dict):
-                    url = y.get('url') or y.get('link') or ''
-                    title = y.get('title') or y.get('name') or url
+                    url = y.get("url") or y.get("link") or ""
+                    title = y.get("title") or url
                     vid = None
-                    try:
-                        parsed = urllib.parse.urlparse(url)
-                        if parsed.hostname and 'youtube' in parsed.hostname:
-                            q = urllib.parse.parse_qs(parsed.query)
-                            vid = q.get('v', [None])[0]
-                            if not vid:
-                                parts = parsed.path.split('/')
-                                for p in parts[::-1]:
-                                    if p and len(p) >= 6:
-                                        vid = p; break
-                    except Exception:
-                        vid = None
+                    if "youtube.com" in url and "v=" in url:
+                        vid = url.split("v=")[1].split("&")[0]
                     thumbnail = f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None
-                    youtube_links_list.append({'title': title, 'url': url, 'video_id': vid, 'thumbnail': thumbnail})
-                    logger.info(f"   - YouTube video: {title[:50]}...")
+                    youtube_links_list.append({"title": title, "url": url, "video_id": vid, "thumbnail": thumbnail})
 
-        # Create short TTS summary - concise voice-only output
-        tts_summary = None
+        # Create TTS summary
+        tts_summary = ""
         try:
             if dtc_code:
-                tts_prompt = f"""Create a brief 3-sentence summary for voice output about diagnostic trouble code {dtc_code}. 
-Focus only on: 1) What the code means, 2) Most common cause, 3) Basic next step.
-Use simple language. NO URLs, no technical details, no markdown, no special characters.
-
-Based on: {rag_answer[:300]}"""
+                tts_prompt = f"Create a brief 3-sentence summary for voice about {dtc_code}. Simple language, no URLs."
             else:
-                tts_prompt = f"""Create a brief 3-sentence summary for voice output about this vehicle issue:
-{question}
-
-Based on: {rag_answer[:300]}
-
-Use simple language. NO URLs, no technical details, no markdown, no special characters."""
+                tts_prompt = f"Create a brief 3-sentence summary for voice about: {question}. Simple language, no URLs."
             
             tts_resp = llm.invoke(tts_prompt)
-            tts_summary = tts_resp.content.strip() if getattr(tts_resp, 'content', None) else None
+            tts_summary = tts_resp.content.strip() if hasattr(tts_resp, "content") else ""
             
+            # Clean TTS summary
             if tts_summary:
-                # Aggressive cleaning for TTS
-                tts_summary = re.sub(r'https?://[^\s]+', '', tts_summary)  # Remove URLs
-                tts_summary = re.sub(r'www\.[^\s]+', '', tts_summary)      # Remove www links
-                tts_summary = re.sub(r'[#*•\-`\[\]{}|\\]', '', tts_summary) # Remove special chars
-                tts_summary = re.sub(r'\n+', ' ', tts_summary)             # Replace newlines
-                tts_summary = re.sub(r'\s+', ' ', tts_summary)             # Normalize spaces
-                tts_summary = tts_summary.strip()
+                tts_summary = re.sub(r"https?://[^\s]+", "", tts_summary)
+                tts_summary = re.sub(r"www\.[^\s]+", "", tts_summary)
+                tts_summary = re.sub(r"[#*•\-`\[\]{}|\\]", "", tts_summary)
+                tts_summary = re.sub(r"\s+", " ", tts_summary).strip()
                 
         except Exception as e:
-            logger.warning(f"Failed to generate TTS summary: {e}")
-            # Simple fallback TTS summary
-            if dtc_code:
-                tts_summary = f"Diagnostic code {dtc_code} detected. This indicates an issue with your vehicle's emission system. Please check the detailed report for specific causes and solutions."
-            else:
-                tts_summary = "Diagnostic information has been found for your vehicle issue. Please check the detailed report for specific causes and solutions."
+            logger.warning(f"Failed to generate TTS: {e}")
+            tts_summary = f"Diagnostic information found for {dtc_code or 'your vehicle issue'}. Check the detailed report for solutions."
 
         payload = {
-            'voice_output': tts_summary,
-            'diagnostic_report': {
-                'content': final_answer,
-                'web_sources': source_urls,
-                'youtube_videos': youtube_links_list
+            "voice_output": tts_summary,
+            "diagnostic_report": {
+                "content": final_answer,
+                "web_sources": source_urls,
+                "youtube_videos": youtube_links_list
             },
-            'dtc_code': dtc_code,
-            'relevance_score': relevance_score
+            "dtc_code": dtc_code,
+            "relevance_score": relevance_score
         }
         
-        # Debug logging to troubleshoot frontend issue
-        logger.info(f"📊 Structured response created:")
-        logger.info(f"   - voice_output: {len(tts_summary or '')} chars")
-        logger.info(f"   - diagnostic_content: {len(final_answer)} chars") 
-        logger.info(f"   - web_sources: {len(source_urls)} items")
-        logger.info(f"   - youtube_videos: {len(youtube_links_list)} items")
-        logger.info(f"   - Full payload keys: {list(payload.keys())}")
-        logger.info(f"   - diagnostic_report keys: {list(payload['diagnostic_report'].keys())}")
-        
-        # Log sample of content for debugging
-        content_preview = (final_answer[:200] + '...') if len(final_answer) > 200 else final_answer
-        logger.info(f"   - Content preview: {content_preview}")
-        
+        logger.info(f"📊 Created response: voice={len(tts_summary)} chars, content={len(final_answer)} chars, web={len(source_urls)}, youtube={len(youtube_links_list)}")
         return payload
         
     except Exception as e:
-        try:
-            logger.error(f'Error in format_diagnostic_results_structured: {e}')
-        except:
-            pass
-        return {'voice_output': (rag_answer or '')[:300], 'diagnostic_report': {'content': (rag_answer or ''), 'web_sources': [], 'youtube_videos': []}, 'dtc_code': dtc_code, 'relevance_score': relevance_score}
+        logger.error(f"Error in format_diagnostic_results_structured: {e}")
+        return {
+            "voice_output": (rag_answer or "")[:200], 
+            "diagnostic_report": {
+                "content": rag_answer or "", 
+                "web_sources": [], 
+                "youtube_videos": []
+            }, 
+            "dtc_code": dtc_code, 
+            "relevance_score": relevance_score
+        }
 
 try:
     format_diagnostic_results = format_diagnostic_results_structured
