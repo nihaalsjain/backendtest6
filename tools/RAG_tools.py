@@ -8,6 +8,8 @@ import re
 import json
 import logging
 import requests
+import time
+from datetime import datetime
 from dotenv import load_dotenv
 from typing import Optional, List, Dict, Any
 from pathlib import Path
@@ -24,6 +26,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 # Load env
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Global variable to store latest diagnostic data for dual-channel approach
+_latest_diagnostic_data = None
 
 # -------------------------
 # Paths and Setup
@@ -888,39 +893,47 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
         
         logger.info(f"📊 Created response: voice={len(tts_summary)} chars, content={len(final_answer)} chars, web={len(source_urls)}, youtube={len(youtube_links_list)}")
         
-        # Return ONLY voice_output as the main response for TTS, 
-        # but embed the structured data in a special format the frontend can parse
-        structured_data = {
-            "diagnostic_report": {
-                "content": final_answer,
-                "web_sources": source_urls,
-                "youtube_videos": youtube_links_list
-            },
+        # DUAL-CHANNEL SOLUTION:
+        # Channel 1: Return only TTS-friendly voice output for chat/TTS
+        # Channel 2: Store diagnostic data in a global variable that frontend can access
+        
+        diagnostic_data = {
+            "content": final_answer,
+            "web_sources": source_urls,
+            "youtube_videos": youtube_links_list,
             "dtc_code": dtc_code,
-            "relevance_score": relevance_score
+            "relevance_score": relevance_score,
+            "timestamp": json.dumps(datetime.now(), default=str) if 'datetime' in globals() else str(int(time.time() * 1000))
         }
         
-        # Use the VOICE|||TEXT format that the frontend already supports
-        combined_response = f"VOICE:{tts_summary}|||TEXT:{json.dumps(structured_data)}"
-        return {"formatted_response": combined_response}
+        # Store diagnostic data globally (will be accessible via a separate endpoint)
+        global _latest_diagnostic_data
+        _latest_diagnostic_data = diagnostic_data
+        
+        logger.info(f"🔊 BACKEND: Returning voice output for TTS: {tts_summary}")
+        logger.info(f"📊 BACKEND: Stored diagnostic data separately - content={len(final_answer)} chars, web_sources={len(source_urls)}, youtube_videos={len(youtube_links_list)}")
+        
+        return tts_summary
         
     except Exception as e:
         logger.error(f"Error in format_diagnostic_results_structured: {e}")
         fallback_tts = f"Diagnostic information found for {dtc_code or 'your vehicle issue'}. Check the detailed report for solutions."
-        fallback_structured = {
-            "diagnostic_report": {
-                "content": rag_answer or "", 
-                "web_sources": [], 
-                "youtube_videos": []
-            }, 
-            "dtc_code": dtc_code, 
-            "relevance_score": relevance_score
-        }
-        combined_response = f"VOICE:{fallback_tts}|||TEXT:{json.dumps(fallback_structured)}"
-        return {"formatted_response": combined_response}
+        logger.info(f"🔊 BACKEND (fallback): Returning only voice output: {fallback_tts}")
+        return fallback_tts
 
 try:
     format_diagnostic_results = format_diagnostic_results_structured
 except Exception:
     pass
+
+def get_latest_diagnostic_data():
+    """Return the latest diagnostic data stored globally"""
+    global _latest_diagnostic_data
+    return _latest_diagnostic_data
+
+def clear_diagnostic_data():
+    """Clear the stored diagnostic data"""
+    global _latest_diagnostic_data
+    _latest_diagnostic_data = None
+
 # --- END: structured format_diagnostic_results ---
