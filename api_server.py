@@ -21,9 +21,13 @@ app = FastAPI(
 # Configure CORS to allow frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific frontend URL
+    allow_origins=[
+        "http://localhost:3000",              # Local development
+        "https://frontendtest5.vercel.app",   # Production Vercel app
+        "https://*.vercel.app",               # All Vercel domains (for branch previews)
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -133,7 +137,7 @@ if __name__ == "__main__":
     
     uvicorn.run(
         "api_server:app",
-        host="0.0.0.0",
+        host="0.0.0.0",  # Allow external connections
         port=8001,
         reload=True,
         log_level="info"
