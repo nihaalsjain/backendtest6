@@ -42,9 +42,11 @@ async def get_diagnostic_data():
         - null if no data is available
     """
     try:
+        logger.info("📊 API: Attempting to retrieve diagnostic data...")
         diagnostic_data = get_latest_diagnostic_data()
         
         if diagnostic_data is None:
+            logger.info("📭 API: No diagnostic data available from get_latest_diagnostic_data()")
             return JSONResponse(
                 status_code=204,  # No Content
                 content={"message": "No diagnostic data available", "data": None}
