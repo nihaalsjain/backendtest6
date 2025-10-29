@@ -6,6 +6,7 @@ This script:
  - parses simple CLI options for `console <lang> [voicebase]`
  - sets environment variables (AGENT_MODE, AGENT_LANG, AGENT_VOICEBASE)
  - calls the `run_agent()` function from agents.automotive_agent
+ - starts diagnostic API server in dev mode for dual-channel TTS/diagnostic data
 
 Notes:
  - The script sets multiprocessing start method to "spawn" to avoid worker issues on
@@ -13,11 +14,15 @@ Notes:
    method was already set in the current process — that is normal in interactive
    sessions but not in fresh process launches.
  - `LANG_ALIASES` and `VOICEBASE_ALIASES` normalize various user inputs.
+ - In dev mode, the diagnostic API server runs on port 8001 alongside the main agent
 """
 
 import sys
 import os
 import multiprocessing
+import threading
+import time
+import logging
 
 # Use 'spawn' start method for cross-platform safety with child processes.
 # This may raise RuntimeError if already set; that's fine for CLI runs which
@@ -59,6 +64,46 @@ VOICEBASE_ALIASES = {
     "voice": "Voice Assistant",
     "live": "Live Assistant",
 }
+
+
+def start_api_server():
+    """Start the diagnostic API server in a separate thread for dev mode."""
+    try:
+        import uvicorn
+        from api_server import app
+        
+        logger = logging.getLogger(__name__)
+        logger.info("🚀 Starting diagnostic API server on port 8001...")
+        
+        # Start API server in a separate thread
+        def run_api():
+            uvicorn.run(
+                app,
+                host="0.0.0.0",
+                port=8001,
+                log_level="info",
+                access_log=False  # Reduce noise in dev mode
+            )
+        
+        api_thread = threading.Thread(target=run_api, daemon=True)
+        api_thread.start()
+        
+        # Give the server a moment to start
+        time.sleep(2)
+        logger.info("✅ Diagnostic API server started at http://localhost:8001")
+        logger.info("📊 Available endpoints:")
+        logger.info("   GET  /api/diagnostic-data   - Retrieve diagnostic data")
+        logger.info("   DELETE /api/diagnostic-data - Clear diagnostic data")
+        logger.info("   GET  /api/health           - Health check")
+        
+        return api_thread
+    except ImportError as e:
+        print(f"⚠️  Could not start API server: {e}")
+        print("   Install FastAPI and uvicorn if you need the diagnostic API")
+        return None
+    except Exception as e:
+        print(f"❌ Failed to start API server: {e}")
+        return None
 
 
 def usage():
@@ -139,7 +184,24 @@ if __name__ == "__main__":
     # --- dev / download-files / any other livekit mode (passthrough) ---
     mode = args_lower[0]
     os.environ["AGENT_MODE"] = mode
+    
+    # Start API server for diagnostic data in dev mode
+    api_thread = None
+    if mode == "dev":
+        print("🔧 Dev mode detected - starting diagnostic API server...")
+        api_thread = start_api_server()
+    
     # Keep the rest of args intact so livekit receives them
     sys.argv = [sys.argv[0], *args_orig]
-    run_agent()
+    
+    try:
+        run_agent()
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down...")
+        if api_thread:
+            print("   Stopping API server...")
+        sys.exit(0)
+    except Exception as e:
+        print(f"❌ Agent error: {e}")
+        sys.exit(1)
 # end
