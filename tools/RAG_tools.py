@@ -887,12 +887,27 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
         }
         
         logger.info(f"📊 Created response: voice={len(tts_summary)} chars, content={len(final_answer)} chars, web={len(source_urls)}, youtube={len(youtube_links_list)}")
-        return payload
+        
+        # Return ONLY voice_output as the main response for TTS, 
+        # but embed the structured data in a special format the frontend can parse
+        structured_data = {
+            "diagnostic_report": {
+                "content": final_answer,
+                "web_sources": source_urls,
+                "youtube_videos": youtube_links_list
+            },
+            "dtc_code": dtc_code,
+            "relevance_score": relevance_score
+        }
+        
+        # Use the VOICE|||TEXT format that the frontend already supports
+        combined_response = f"VOICE:{tts_summary}|||TEXT:{json.dumps(structured_data)}"
+        return {"formatted_response": combined_response}
         
     except Exception as e:
         logger.error(f"Error in format_diagnostic_results_structured: {e}")
-        return {
-            "voice_output": (rag_answer or "")[:200], 
+        fallback_tts = f"Diagnostic information found for {dtc_code or 'your vehicle issue'}. Check the detailed report for solutions."
+        fallback_structured = {
             "diagnostic_report": {
                 "content": rag_answer or "", 
                 "web_sources": [], 
@@ -901,6 +916,8 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
             "dtc_code": dtc_code, 
             "relevance_score": relevance_score
         }
+        combined_response = f"VOICE:{fallback_tts}|||TEXT:{json.dumps(fallback_structured)}"
+        return {"formatted_response": combined_response}
 
 try:
     format_diagnostic_results = format_diagnostic_results_structured
