@@ -30,6 +30,37 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # Global variable to store latest diagnostic data for dual-channel approach
 _latest_diagnostic_data = None
 
+# File-based storage for sharing data between processes
+DIAGNOSTIC_DATA_FILE = Path(__file__).parent.parent / "diagnostic_data.json"
+
+def _save_diagnostic_data_to_file(data):
+    """Save diagnostic data to file for cross-process sharing"""
+    try:
+        with open(DIAGNOSTIC_DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info(f"💾 Diagnostic data saved to file: {DIAGNOSTIC_DATA_FILE}")
+    except Exception as e:
+        logger.error(f"❌ Failed to save diagnostic data to file: {e}")
+
+def _load_diagnostic_data_from_file():
+    """Load diagnostic data from file for cross-process sharing"""
+    try:
+        logger.info(f"📂 Checking for diagnostic data file: {DIAGNOSTIC_DATA_FILE}")
+        logger.info(f"📂 File exists: {DIAGNOSTIC_DATA_FILE.exists()}")
+        
+        if DIAGNOSTIC_DATA_FILE.exists():
+            logger.info(f"📂 Reading diagnostic data from: {DIAGNOSTIC_DATA_FILE.absolute()}")
+            with open(DIAGNOSTIC_DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            logger.info(f"📂 Diagnostic data loaded successfully - {len(data)} keys")
+            return data
+        else:
+            logger.info(f"📭 Diagnostic data file does not exist: {DIAGNOSTIC_DATA_FILE.absolute()}")
+    except Exception as e:
+        logger.error(f"❌ Failed to load diagnostic data from file: {e}")
+        logger.error(f"❌ File path attempted: {DIAGNOSTIC_DATA_FILE.absolute()}")
+    return None
+
 # -------------------------
 # Paths and Setup
 # -------------------------
@@ -910,6 +941,9 @@ def format_diagnostic_results_structured(question: str, rag_answer: str, web_res
         global _latest_diagnostic_data
         _latest_diagnostic_data = diagnostic_data
         
+        # Also save to file for cross-process access (API server)
+        _save_diagnostic_data_to_file(diagnostic_data)
+        
         logger.info(f"🔊 BACKEND: Returning voice output for TTS: {tts_summary}")
         logger.info(f"📊 BACKEND: Stored diagnostic data separately - content={len(final_answer)} chars, web_sources={len(source_urls)}, youtube_videos={len(youtube_links_list)}")
         
@@ -927,13 +961,34 @@ except Exception:
     pass
 
 def get_latest_diagnostic_data():
-    """Return the latest diagnostic data stored globally"""
+    """Return the latest diagnostic data stored globally and in file"""
     global _latest_diagnostic_data
-    return _latest_diagnostic_data
+    
+    # Try global variable first (same process)
+    if _latest_diagnostic_data:
+        logger.info("📊 Returning diagnostic data from global variable")
+        return _latest_diagnostic_data
+    
+    # Fall back to file storage (cross-process)
+    file_data = _load_diagnostic_data_from_file()
+    if file_data:
+        logger.info("📂 Returning diagnostic data from file storage")
+        return file_data
+    
+    logger.info("📭 No diagnostic data available")
+    return None
 
 def clear_diagnostic_data():
-    """Clear the stored diagnostic data"""
+    """Clear the stored diagnostic data from both global and file"""
     global _latest_diagnostic_data
     _latest_diagnostic_data = None
+    
+    # Also clear file storage
+    try:
+        if DIAGNOSTIC_DATA_FILE.exists():
+            DIAGNOSTIC_DATA_FILE.unlink()
+            logger.info("🧹 Diagnostic data file cleared")
+    except Exception as e:
+        logger.error(f"❌ Failed to clear diagnostic data file: {e}")
 
 # --- END: structured format_diagnostic_results ---
